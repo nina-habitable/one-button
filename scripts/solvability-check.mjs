@@ -1,11 +1,11 @@
-// Design-validation simulation for Stage 1's procedural gaps.
+// Design-validation simulation for Stage 1's procedural layout (gaps + obstacles).
 // It mirrors the EXACT constants, generator, and physics from game/stages/stage1.js,
 // then plays each random layout two ways:
-//   • "straddle" bot — jumps at the ideal moment (proves geometric solvability)
-//   • "late" bot     — jumps at the LAST safe instant, maximizing landing
-//                      overshoot (the worst case for the spacing floor)
-// It also measures the smallest "reaction budget" any layout leaves: the time
-// the square is on the ground before the last possible takeoff for the next gap.
+//   • "ideal" bot — jumps at the best moment (proves everything is clearable)
+//   • "late"  bot — jumps at the LAST safe instant for every hazard (worst case
+//                   for landing overshoot and reaction time)
+// It also measures the smallest reaction budget any layout leaves and checks the
+// obstacle mix really varies run to run.
 //
 // Run with:  node scripts/solvability-check.mjs
 
@@ -17,66 +17,104 @@ const GRAVITY = 2.6;
 
 const AIRTIME = (2 * JUMP) / GRAVITY;
 const MAX_REACH = SPEED * AIRTIME;
+const MAX_JUMP_HEIGHT = (JUMP * JUMP) / (2 * GRAVITY);
+
 const MAX_GAP = MAX_REACH * 0.6;
 const MIN_GAP = MAX_REACH * 0.25;
 
+const MAX_OBSTACLE_HEIGHT = MAX_JUMP_HEIGHT * 0.5;
+const MIN_OBSTACLE_HEIGHT = MAX_JUMP_HEIGHT * 0.22;
+const OBSTACLE_MIN_WIDTH = 0.04;
+const OBSTACLE_MAX_WIDTH = 0.09;
+
 const REACTION_AND_LATENCY = 0.3;
-const LANDING_OVERSHOOT = MAX_REACH - MIN_GAP;
+const GAP_OVERSHOOT = MAX_REACH - MIN_GAP;
+const RISE_TIME_TO_MIN_OBSTACLE =
+  (JUMP - Math.sqrt(JUMP * JUMP - 2 * GRAVITY * MIN_OBSTACLE_HEIGHT)) / GRAVITY;
+const OBSTACLE_OVERSHOOT = MAX_REACH - SPEED * RISE_TIME_TO_MIN_OBSTACLE - OBSTACLE_MIN_WIDTH;
+const LANDING_OVERSHOOT = Math.max(GAP_OVERSHOOT, OBSTACLE_OVERSHOOT);
 const MIN_SPACING = LANDING_OVERSHOOT + REACTION_AND_LATENCY * SPEED;
+const RISE_TIME_TO_MAX_OBSTACLE =
+  (JUMP - Math.sqrt(JUMP * JUMP - 2 * GRAVITY * MAX_OBSTACLE_HEIGHT)) / GRAVITY;
+const OBSTACLE_LEAD = SPEED * RISE_TIME_TO_MAX_OBSTACLE;
+const MIN_SPACING_OBSTACLE = MIN_SPACING + OBSTACLE_LEAD;
 const MAX_SPACING = 0.85;
 const SPACING_BIAS = 2;
 
+// The late survival bot jumps this much (world units) before the theoretical last
+// instant, so it leaves realistic clearance instead of grazing the exact pixel-top
+// of an obstacle. It still lands late (max overshoot) — the thing worth stressing.
+const LATE_MARGIN = 0.04;
+
+// Rise time: how long after takeoff the rising square first reaches height h.
+function riseTime(h) {
+  return (JUMP - Math.sqrt(JUMP * JUMP - 2 * GRAVITY * h)) / GRAVITY;
+}
+// The LATEST square-center position at which a jump still clears a hazard:
+//   • gap:      jump right at the edge.
+//   • obstacle: jump early enough to already be above it on arrival.
+function latestTakeoff(f) {
+  return f.type === "gap" ? f.start : f.start - SPEED * riseTime(f.height);
+}
+
 // --- Generator copied verbatim from stage1.js ---
-function generateGaps() {
-  const gaps = [];
+function generateFeatures() {
   const count = 5 + Math.floor(Math.random() * 3);
-  let cursor = SQUARE_X + 0.9 + Math.random() * 0.4;
+  const obstacleChance = 0.2 + Math.random() * 0.6;
+
+  const specs = [];
   for (let i = 0; i < count; i++) {
     const difficulty = count > 1 ? i / (count - 1) : 0;
-    const widthHigh = MIN_GAP + (MAX_GAP - MIN_GAP) * (0.4 + 0.6 * difficulty);
-    const width = MIN_GAP + Math.random() * (widthHigh - MIN_GAP);
-    gaps.push({ start: cursor, width });
-    const bias = Math.pow(Math.random(), SPACING_BIAS);
-    const spacing = MIN_SPACING + bias * (MAX_SPACING - MIN_SPACING);
-    cursor = cursor + width + spacing;
+    if (Math.random() < obstacleChance) {
+      const heightHigh =
+        MIN_OBSTACLE_HEIGHT + (MAX_OBSTACLE_HEIGHT - MIN_OBSTACLE_HEIGHT) * (0.4 + 0.6 * difficulty);
+      const height = MIN_OBSTACLE_HEIGHT + Math.random() * (heightHigh - MIN_OBSTACLE_HEIGHT);
+      const width = OBSTACLE_MIN_WIDTH + Math.random() * (OBSTACLE_MAX_WIDTH - OBSTACLE_MIN_WIDTH);
+      specs.push({ type: "obstacle", width, height });
+    } else {
+      const widthHigh = MIN_GAP + (MAX_GAP - MIN_GAP) * (0.4 + 0.6 * difficulty);
+      const width = MIN_GAP + Math.random() * (widthHigh - MIN_GAP);
+      specs.push({ type: "gap", width });
+    }
   }
-  return gaps;
+
+  let cursor = SQUARE_X + 0.9 + Math.random() * 0.4;
+  const features = [];
+  for (let i = 0; i < count; i++) {
+    const spec = specs[i];
+    features.push({ ...spec, start: cursor });
+    const next = specs[i + 1];
+    const nextFloor = next && next.type === "obstacle" ? MIN_SPACING_OBSTACLE : MIN_SPACING;
+    const bias = Math.pow(Math.random(), SPACING_BIAS);
+    const spacing = nextFloor + bias * (MAX_SPACING - nextFloor);
+    cursor = cursor + spec.width + spacing;
+  }
+  return features;
 }
 
 // --- Play one layout with a chosen jump strategy ---
-// strategy "straddle": take off so the jump straddles the gap symmetrically.
-// strategy "late":     take off at the very last safe instant (center at lip).
-function playLayout(gaps, strategy) {
-  const finish = gaps[gaps.length - 1].start + gaps[gaps.length - 1].width + 0.8;
+function playLayout(features, strategy) {
+  const last = features[features.length - 1];
+  const finish = last.start + last.width + 0.8;
   let distance = 0, y = 0, vy = 0, grounded = true, fallingIntoPit = false;
   const dt = 1 / 60;
 
-  // Ideal takeoff position for each gap under each strategy.
-  const takeoff = gaps.map((g) =>
-    strategy === "late"
-      ? g.start - 0.01 // essentially at the lip
-      : g.start - (MAX_REACH - g.width) / 2 // symmetric straddle
-  );
+  // Ideal / latest takeoff position (square center, world units) for each hazard.
+  const takeoff = features.map((f) => {
+    if (strategy === "late") return latestTakeoff(f) - LATE_MARGIN; // near-latest, with clearance
+    // ideal: comfortable timing — straddle a gap, apex over an obstacle's center.
+    if (f.type === "gap") return f.start - (MAX_REACH - f.width) / 2;
+    return f.start + f.width / 2 - MAX_REACH / 2;
+  });
 
-  let gapIndex = 0;
-  let lastLandTime = 0; // sim-time (seconds) the square last became grounded
-  let minReactionBudget = Infinity; // smallest grounded time before a gap's lip
+  let target = 0;
 
   for (let frame = 0; frame < 6000; frame++) {
-    const time = frame * dt;
     const center = distance + SQUARE_X;
 
-    while (gapIndex < gaps.length && center > gaps[gapIndex].start + gaps[gapIndex].width) {
-      gapIndex++;
-    }
+    while (target < features.length && center > features[target].start + features[target].width) target++;
 
-    // Measure the reaction budget: when the center reaches the next gap's lip,
-    // how long had the square been grounded since its last landing?
-    if (gapIndex < gaps.length && center >= gaps[gapIndex].start && center - SPEED * dt < gaps[gapIndex].start) {
-      minReactionBudget = Math.min(minReactionBudget, time - lastLandTime);
-    }
-
-    if (grounded && gapIndex < gaps.length && center >= takeoff[gapIndex] && center < gaps[gapIndex].start) {
+    if (grounded && target < features.length && center >= takeoff[target]) {
       vy = JUMP;
       grounded = false;
     }
@@ -87,74 +125,97 @@ function playLayout(gaps, strategy) {
 
     const c = distance + SQUARE_X;
     let solidBelow = true;
-    for (const g of gaps) {
-      if (c >= g.start && c <= g.start + g.width) { solidBelow = false; break; }
+    for (const f of features) {
+      if (f.type === "gap" && c >= f.start && c <= f.start + f.width) { solidBelow = false; break; }
     }
 
-    const wasGrounded = grounded;
     if (fallingIntoPit) {
       // no rescue
     } else if (solidBelow) {
-      if (y <= 0 && vy <= 0) {
-        y = 0; vy = 0;
-        if (!wasGrounded) lastLandTime = time; // record the landing moment
-        grounded = true;
-      }
+      if (y <= 0 && vy <= 0) { y = 0; vy = 0; grounded = true; }
     } else {
       if (y <= 0) { fallingIntoPit = true; grounded = false; }
     }
 
-    if (fallingIntoPit && y < -0.12) return { won: false, minReactionBudget };
-    if (distance + SQUARE_X >= finish) return { won: true, minReactionBudget };
+    // Obstacle collision (point model at the square's center).
+    for (const f of features) {
+      if (f.type === "obstacle" && c >= f.start && c <= f.start + f.width && y < f.height) {
+        return { won: false };
+      }
+    }
+
+    if (fallingIntoPit && y < -0.12) return { won: false };
+    if (distance + SQUARE_X >= finish) return { won: true };
   }
-  return { won: false, minReactionBudget, note: "ran out of frames" };
+  return { won: false };
+}
+
+// Rigorous fairness check, straight from the geometry (no bot survival needed):
+// for each hazard, the grounded time between the WORST-CASE landing after the
+// previous hazard and the LATEST safe jump for this one. Must stay >= reaction+latency.
+function minReactionBudgetSeconds(features) {
+  let worst = Infinity;
+  for (let i = 1; i < features.length; i++) {
+    const worstLanding = latestTakeoff(features[i - 1]) + MAX_REACH; // jumped as late as possible
+    const budget = (latestTakeoff(features[i]) - worstLanding) / SPEED;
+    worst = Math.min(worst, budget);
+  }
+  return worst;
 }
 
 // --- Run many trials ---
 const TRIALS = 20000;
-let straddleFails = 0, lateFails = 0;
-let maxWidth = 0, minSpacing = Infinity, maxSpacing = 0;
+let idealFails = 0, lateFails = 0;
+let maxGapWidth = 0, maxObsHeight = 0;
+let minSpacingBeforeGap = Infinity, minSpacingBeforeObstacle = Infinity;
 let worstBudget = Infinity;
-
-// Track how spacings are distributed across the floor→ceiling range, so we can
-// see that tight (near-floor) spacing really does happen regularly.
-let spacingCount = 0, spacingSum = 0;
-let tightCount = 0; // spacings within the tightest 20% of the range (near floor)
-const range = MAX_SPACING - MIN_SPACING;
+let obsShareMin = Infinity, obsShareMax = 0, obsShareSum = 0;
+let totalGaps = 0, totalObstacles = 0;
 
 for (let i = 0; i < TRIALS; i++) {
-  const gaps = generateGaps();
-  for (let j = 0; j < gaps.length; j++) {
-    maxWidth = Math.max(maxWidth, gaps[j].width);
+  const features = generateFeatures();
+
+  let obs = 0;
+  for (let j = 0; j < features.length; j++) {
+    const f = features[j];
+    if (f.type === "obstacle") { obs++; totalObstacles++; maxObsHeight = Math.max(maxObsHeight, f.height); }
+    else { totalGaps++; maxGapWidth = Math.max(maxGapWidth, f.width); }
     if (j > 0) {
-      const spacing = gaps[j].start - (gaps[j - 1].start + gaps[j - 1].width);
-      minSpacing = Math.min(minSpacing, spacing);
-      maxSpacing = Math.max(maxSpacing, spacing);
-      spacingCount++;
-      spacingSum += spacing;
-      if (spacing <= MIN_SPACING + 0.2 * range) tightCount++;
+      const spacing = f.start - (features[j - 1].start + features[j - 1].width);
+      if (f.type === "obstacle") minSpacingBeforeObstacle = Math.min(minSpacingBeforeObstacle, spacing);
+      else minSpacingBeforeGap = Math.min(minSpacingBeforeGap, spacing);
     }
   }
-  if (!playLayout(gaps, "straddle").won) straddleFails++;
-  const late = playLayout(gaps, "late");
-  if (!late.won) lateFails++;
-  worstBudget = Math.min(worstBudget, late.minReactionBudget);
+  const share = obs / features.length;
+  obsShareMin = Math.min(obsShareMin, share);
+  obsShareMax = Math.max(obsShareMax, share);
+  obsShareSum += share;
+
+  if (!playLayout(features, "ideal").won) idealFails++;
+  if (!playLayout(features, "late").won) lateFails++;
+  worstBudget = Math.min(worstBudget, minReactionBudgetSeconds(features));
 }
 
 const fmt = (n) => n.toFixed(4);
-console.log(`MAX_REACH (farthest a perfect jump travels): ${fmt(MAX_REACH)} W`);
-console.log(`MAX_GAP cap (0.6 x MAX_REACH):               ${fmt(MAX_GAP)} W`);
-console.log(`Widest gap generated:                        ${fmt(maxWidth)} W`);
-console.log(`Spacing floor (MIN_SPACING):                 ${fmt(MIN_SPACING)} W  (~${(MIN_SPACING / SPEED).toFixed(2)}s of ground)`);
-console.log(`Spacing ceiling (MAX_SPACING):               ${fmt(MAX_SPACING)} W  (~${(MAX_SPACING / SPEED).toFixed(2)}s of ground)`);
-console.log(`Spacing actually generated:                  ${fmt(minSpacing)} .. ${fmt(maxSpacing)} W`);
-console.log(`Average spacing:                             ${fmt(spacingSum / spacingCount)} W`);
-console.log(`Share of gaps in tightest 20% (near floor):  ${((tightCount / spacingCount) * 100).toFixed(1)}%`);
-console.log(`Worst-case reaction budget (late-jump bot):  ${(worstBudget * 1000).toFixed(0)} ms grounded before the lip`);
-console.log(`Reaction + touch latency budgeted for:       ${(REACTION_AND_LATENCY * 1000).toFixed(0)} ms`);
-console.log(`Trials: ${TRIALS}`);
-console.log(`  straddle-timing failures: ${straddleFails}`);
-console.log(`  late-timing failures:     ${lateFails}`);
-console.log(straddleFails === 0 && lateFails === 0
-  ? "PASS — every layout beatable with both ideal AND worst-case-late timing."
-  : "FAIL — found unbeatable layouts!");
+const pct = (n) => (n * 100).toFixed(0) + "%";
+console.log("HAZARD SIZE CAPS");
+console.log(`  MAX_REACH (jump's sideways reach):     ${fmt(MAX_REACH)} W`);
+console.log(`  Gap width cap / widest generated:      ${fmt(MAX_GAP)} / ${fmt(maxGapWidth)} W`);
+console.log(`  Max jump height (apex):                ${fmt(MAX_JUMP_HEIGHT)} H`);
+console.log(`  Obstacle height cap / tallest gen'd:   ${fmt(MAX_OBSTACLE_HEIGHT)} / ${fmt(maxObsHeight)} H`);
+console.log("SPACING FLOORS (ground before a hazard)");
+console.log(`  Floor before a gap:                    ${fmt(MIN_SPACING)} W   (min gen'd ${fmt(minSpacingBeforeGap)})`);
+console.log(`  Floor before an obstacle (+lead):      ${fmt(MIN_SPACING_OBSTACLE)} W   (min gen'd ${fmt(minSpacingBeforeObstacle)})`);
+console.log(`  Ceiling:                               ${fmt(MAX_SPACING)} W`);
+console.log("MIX VARIETY (obstacle share per run)");
+console.log(`  min / average / max across runs:       ${pct(obsShareMin)} / ${pct(obsShareSum / TRIALS)} / ${pct(obsShareMax)}`);
+console.log(`  total gaps vs obstacles generated:     ${totalGaps} gaps, ${totalObstacles} obstacles`);
+console.log("FAIRNESS");
+console.log(`  Worst-case reaction budget (geometry): ${(worstBudget * 1000).toFixed(0)} ms   (must stay >= 300 ms)`);
+console.log("SOLVABILITY");
+console.log(`  Trials: ${TRIALS}   ideal-timing failures: ${idealFails}   late-timing failures: ${lateFails}`);
+console.log(
+  idealFails === 0 && lateFails === 0 && worstBudget * 1000 >= 300
+    ? "PASS — every layout clearable with ideal AND worst-case-late timing, reaction margin held."
+    : "FAIL — check the numbers above!"
+);
