@@ -11,7 +11,7 @@
 
 // --- Constants copied verbatim from stage1.js ---
 const SQUARE_X = 0.28;
-const SPEED = 0.5;
+const SPEED = 0.575; // base +15%
 const JUMP = 1.05;
 const GRAVITY = 2.6;
 

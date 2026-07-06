@@ -25,7 +25,7 @@ export function createStage1() {
   // --- Tuning knobs (all in the W/H unit system described above) ---
   const SQUARE_X = 0.28; // square's fixed horizontal spot (0=left, 1=right)
   const GROUND_Y = 0.78; // ground line height (0=top, 1=bottom)
-  const SPEED = 0.5; // world scroll speed, in screen-widths per second
+  const SPEED = 0.575; // world scroll speed, in screen-widths per second (base +15%)
   const JUMP = 1.05; // upward launch speed of a jump (screen-heights/sec)
   const GRAVITY = 2.6; // how fast gravity pulls the square down (H/sec²)
   const SQUARE_SIZE = 0.075; // square size, as a fraction of the shorter screen side
@@ -74,9 +74,9 @@ export function createStage1() {
   // left), so every hazard is visible across (1 − SQUARE_X) of a screen width
   // before it arrives. At SPEED that is a long time:
   //
-  //     VISIBILITY_TIME = (1 − SQUARE_X) / SPEED   ≈ 1.4 seconds of warning
+  //     VISIBILITY_TIME = (1 − SQUARE_X) / SPEED   ≈ 1.25 seconds of warning
   //
-  // That is roughly SEVEN times a human's ~0.2 s reaction time. So the player
+  // That is roughly SIX times a human's ~0.2 s reaction time. So the player
   // never reacts at the last instant — they SEE each hazard coming and plan the
   // tap in advance. Reaction time therefore costs us nothing and does NOT belong
   // in the floor. (The earlier model wrongly added 0.2 s of reaction here, as if
