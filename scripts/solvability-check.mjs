@@ -27,19 +27,22 @@ const MIN_OBSTACLE_HEIGHT = MAX_JUMP_HEIGHT * 0.22;
 const OBSTACLE_MIN_WIDTH = 0.04;
 const OBSTACLE_MAX_WIDTH = 0.09;
 
-const REACTION_AND_LATENCY = 0.3;
+// Anticipation model: hazards are visible from the right edge long before they
+// arrive, so reaction time is absorbed and only touch latency remains in the floor.
+const VISIBILITY_TIME = (1 - SQUARE_X) / SPEED;
+const TOUCH_LATENCY = 0.1;
 const GAP_OVERSHOOT = MAX_REACH - MIN_GAP;
 const RISE_TIME_TO_MIN_OBSTACLE =
   (JUMP - Math.sqrt(JUMP * JUMP - 2 * GRAVITY * MIN_OBSTACLE_HEIGHT)) / GRAVITY;
 const OBSTACLE_OVERSHOOT = MAX_REACH - SPEED * RISE_TIME_TO_MIN_OBSTACLE - OBSTACLE_MIN_WIDTH;
 const LANDING_OVERSHOOT = Math.max(GAP_OVERSHOOT, OBSTACLE_OVERSHOOT);
-const MIN_SPACING = LANDING_OVERSHOOT + REACTION_AND_LATENCY * SPEED;
+const MIN_SPACING = LANDING_OVERSHOOT + TOUCH_LATENCY * SPEED;
 const RISE_TIME_TO_MAX_OBSTACLE =
   (JUMP - Math.sqrt(JUMP * JUMP - 2 * GRAVITY * MAX_OBSTACLE_HEIGHT)) / GRAVITY;
 const OBSTACLE_LEAD = SPEED * RISE_TIME_TO_MAX_OBSTACLE;
 const MIN_SPACING_OBSTACLE = MIN_SPACING + OBSTACLE_LEAD;
 const MAX_SPACING = 0.85;
-const SPACING_BIAS = 2;
+const SPACING_BIAS = 3;
 
 // The late survival bot jumps this much (world units) before the theoretical last
 // instant, so it leaves realistic clearance instead of grazing the exact pixel-top
@@ -171,6 +174,7 @@ let minSpacingBeforeGap = Infinity, minSpacingBeforeObstacle = Infinity;
 let worstBudget = Infinity;
 let obsShareMin = Infinity, obsShareMax = 0, obsShareSum = 0;
 let totalGaps = 0, totalObstacles = 0;
+let spacingCount = 0, tightCount = 0;
 
 for (let i = 0; i < TRIALS; i++) {
   const features = generateFeatures();
@@ -182,8 +186,11 @@ for (let i = 0; i < TRIALS; i++) {
     else { totalGaps++; maxGapWidth = Math.max(maxGapWidth, f.width); }
     if (j > 0) {
       const spacing = f.start - (features[j - 1].start + features[j - 1].width);
+      const floor = f.type === "obstacle" ? MIN_SPACING_OBSTACLE : MIN_SPACING;
       if (f.type === "obstacle") minSpacingBeforeObstacle = Math.min(minSpacingBeforeObstacle, spacing);
       else minSpacingBeforeGap = Math.min(minSpacingBeforeGap, spacing);
+      spacingCount++;
+      if (spacing <= floor + 0.2 * (MAX_SPACING - floor)) tightCount++; // in the tightest fifth
     }
   }
   const share = obs / features.length;
@@ -207,15 +214,19 @@ console.log("SPACING FLOORS (ground before a hazard)");
 console.log(`  Floor before a gap:                    ${fmt(MIN_SPACING)} W   (min gen'd ${fmt(minSpacingBeforeGap)})`);
 console.log(`  Floor before an obstacle (+lead):      ${fmt(MIN_SPACING_OBSTACLE)} W   (min gen'd ${fmt(minSpacingBeforeObstacle)})`);
 console.log(`  Ceiling:                               ${fmt(MAX_SPACING)} W`);
+console.log(`  Spacings in the tightest fifth (bias=3): ${pct(tightCount / spacingCount)}`);
 console.log("MIX VARIETY (obstacle share per run)");
 console.log(`  min / average / max across runs:       ${pct(obsShareMin)} / ${pct(obsShareSum / TRIALS)} / ${pct(obsShareMax)}`);
 console.log(`  total gaps vs obstacles generated:     ${totalGaps} gaps, ${totalObstacles} obstacles`);
+console.log("ANTICIPATION MODEL");
+console.log(`  Hazard visible before arriving:        ${VISIBILITY_TIME.toFixed(2)} s   (vs ~0.20 s reaction → reaction absorbed)`);
+console.log(`  Floor budget = touch latency only:     ${(TOUCH_LATENCY * 1000).toFixed(0)} ms`);
 console.log("FAIRNESS");
-console.log(`  Worst-case reaction budget (geometry): ${(worstBudget * 1000).toFixed(0)} ms   (must stay >= 300 ms)`);
+console.log(`  Worst-case grounded margin (geometry): ${(worstBudget * 1000).toFixed(0)} ms   (must stay >= ${(TOUCH_LATENCY * 1000).toFixed(0)} ms)`);
 console.log("SOLVABILITY");
 console.log(`  Trials: ${TRIALS}   ideal-timing failures: ${idealFails}   late-timing failures: ${lateFails}`);
 console.log(
-  idealFails === 0 && lateFails === 0 && worstBudget * 1000 >= 300
-    ? "PASS — every layout clearable with ideal AND worst-case-late timing, reaction margin held."
+  idealFails === 0 && lateFails === 0 && worstBudget * 1000 >= TOUCH_LATENCY * 1000 - 0.5
+    ? "PASS — every layout clearable with ideal AND worst-case-late timing; grounded margin >= touch latency."
     : "FAIL — check the numbers above!"
 );

@@ -65,28 +65,48 @@ export function createStage1() {
   // SPACING BETWEEN HAZARDS (why the floor and ceiling are what they are)
   // ---------------------------------------------------------------------------
   // Hazard SIZE is a distance/height problem. SPACING — the flat ground between
-  // one hazard and the next — is a TIME problem: after clearing one hazard the
-  // player must LAND, SEE the next one, and get a tap registered before they must
-  // jump for it. We budget that in seconds and convert to world units with SPEED.
+  // one hazard and the next — is a TIME problem. The floor (the tightest spacing
+  // we ever allow) is built from what the player physically needs between jumps.
   //
-  // The base floor (used before a GAP) is built from three real costs:
-  //   • Reaction to a visual cue ............ ~0.20 s
-  //   • Touch input latency (finger→event) .. ~0.10 s   (mobiles are laggier here)
-  //   • Landing overshoot: every jump flies the SAME fixed distance (MAX_REACH),
-  //     so after clearing a hazard the square keeps sailing PAST it before its
-  //     feet are down. That ground is "used up" by the previous jump. We take the
-  //     WORST overshoot across BOTH hazard types:
+  // ANTICIPATION, NOT REACTION.
+  // Hazards scroll in from the RIGHT EDGE of the screen and travel all the way to
+  // the player before they matter. The player sits at SQUARE_X (28% from the
+  // left), so every hazard is visible across (1 − SQUARE_X) of a screen width
+  // before it arrives. At SPEED that is a long time:
+  //
+  //     VISIBILITY_TIME = (1 − SQUARE_X) / SPEED   ≈ 1.4 seconds of warning
+  //
+  // That is roughly SEVEN times a human's ~0.2 s reaction time. So the player
+  // never reacts at the last instant — they SEE each hazard coming and plan the
+  // tap in advance. Reaction time therefore costs us nothing and does NOT belong
+  // in the floor. (The earlier model wrongly added 0.2 s of reaction here, as if
+  // the player were blind until landing. Removing it is what lets spacing tighten.)
+  //
+  // What anticipation CANNOT remove are two physical facts:
+  //   • Landing overshoot — every jump flies the SAME fixed distance (MAX_REACH),
+  //     so after a hazard the square keeps sailing PAST it before its feet touch
+  //     down. That ground is spent no matter how well you plan. We take the WORST
+  //     overshoot across BOTH hazard types:
   //       – narrowest gap:     lands (MAX_REACH − MIN_GAP) past the gap.
   //       – smallest obstacle: you jump almost at it and still fly the full reach,
-  //         landing (MAX_REACH − rise-lead − width) past it — which is actually
-  //         FARTHER than the narrow-gap case, so it sets the floor.
-  const REACTION_AND_LATENCY = 0.3; // seconds: see the next hazard + register a tap
+  //         landing (MAX_REACH − rise-lead − width) past it — FARTHER than the
+  //         narrow-gap case, so it sets the floor.
+  //   • Touch latency — the jump only fires once the square is grounded, and a
+  //     finger-tap still takes ~0.1 s to register. Even a perfectly-planned player
+  //     needs that sliver of grounded time before the jump takes effect.
+  //
+  // So the floor is simply: worst landing overshoot + touch latency.
+  const VISIBILITY_TIME = (1 - SQUARE_X) / SPEED; // seconds a hazard is on screen before it arrives
+  const TOUCH_LATENCY = 0.1; // seconds: finger-tap → jump registered (physical; can't be planned away)
+
   const GAP_OVERSHOOT = MAX_REACH - MIN_GAP;
   const RISE_TIME_TO_MIN_OBSTACLE =
     (JUMP - Math.sqrt(JUMP * JUMP - 2 * GRAVITY * MIN_OBSTACLE_HEIGHT)) / GRAVITY;
   const OBSTACLE_OVERSHOOT = MAX_REACH - SPEED * RISE_TIME_TO_MIN_OBSTACLE - OBSTACLE_MIN_WIDTH;
   const LANDING_OVERSHOOT = Math.max(GAP_OVERSHOOT, OBSTACLE_OVERSHOOT); // worst of the two
-  const MIN_SPACING = LANDING_OVERSHOOT + REACTION_AND_LATENCY * SPEED; // floor before a gap
+  const MIN_SPACING = LANDING_OVERSHOOT + TOUCH_LATENCY * SPEED; // floor before a gap
+
+  void VISIBILITY_TIME; // computed above purely to document the anticipation window
 
   // OBSTACLES need MORE room in front of them than gaps. For a gap you can jump
   // right at its edge; for an obstacle you must already be tall enough by the time
@@ -102,9 +122,11 @@ export function createStage1() {
   // The ceiling caps dead air (~1.7 s of running), so no boring gap-less lulls.
   const MAX_SPACING = 0.85;
   // How hard the random spacing is pulled toward the floor. Raising a 0..1 random
-  // number to this power: 1 = flat/uniform; 2 concentrates most draws near 0 (the
-  // floor), so tight quick-succession jumps are a regular challenge, not a rarity.
-  const SPACING_BIAS = 2;
+  // number to this power: 1 = flat/uniform; 3 pulls HARD toward 0 (the floor), so
+  // most hazards land at or near the tightest spacing. Combined with the lower
+  // anticipation-based floor, this makes quick tap-land-tap double-jumps the norm
+  // rather than an occasional event. (~58% of spacings fall in the tightest fifth.)
+  const SPACING_BIAS = 3;
 
   // --- Live state that changes as the stage plays ---
   const s = {
