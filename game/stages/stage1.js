@@ -122,11 +122,12 @@ export function createStage1() {
   // The ceiling caps dead air (~1.7 s of running), so no boring gap-less lulls.
   const MAX_SPACING = 0.85;
   // How hard the random spacing is pulled toward the floor. Raising a 0..1 random
-  // number to this power: 1 = flat/uniform; 3 pulls HARD toward 0 (the floor), so
-  // most hazards land at or near the tightest spacing. Combined with the lower
+  // number to this power: 1 = flat/uniform; 4 pulls VERY hard toward 0 (the floor),
+  // so most hazards land at or near the tightest spacing. Combined with the lower
   // anticipation-based floor, this makes quick tap-land-tap double-jumps the norm
-  // rather than an occasional event. (~58% of spacings fall in the tightest fifth.)
-  const SPACING_BIAS = 3;
+  // rather than an occasional event. This only reshapes the draw ABOVE the floor —
+  // it never lowers the floor, so the worst-case grounded margin is unchanged.
+  const SPACING_BIAS = 4;
 
   // --- Live state that changes as the stage plays ---
   const s = {

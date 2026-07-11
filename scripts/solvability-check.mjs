@@ -42,7 +42,7 @@ const RISE_TIME_TO_MAX_OBSTACLE =
 const OBSTACLE_LEAD = SPEED * RISE_TIME_TO_MAX_OBSTACLE;
 const MIN_SPACING_OBSTACLE = MIN_SPACING + OBSTACLE_LEAD;
 const MAX_SPACING = 0.85;
-const SPACING_BIAS = 3;
+const SPACING_BIAS = 4;
 
 // The late survival bot jumps this much (world units) before the theoretical last
 // instant, so it leaves realistic clearance instead of grazing the exact pixel-top
@@ -214,7 +214,7 @@ console.log("SPACING FLOORS (ground before a hazard)");
 console.log(`  Floor before a gap:                    ${fmt(MIN_SPACING)} W   (min gen'd ${fmt(minSpacingBeforeGap)})`);
 console.log(`  Floor before an obstacle (+lead):      ${fmt(MIN_SPACING_OBSTACLE)} W   (min gen'd ${fmt(minSpacingBeforeObstacle)})`);
 console.log(`  Ceiling:                               ${fmt(MAX_SPACING)} W`);
-console.log(`  Spacings in the tightest fifth (bias=3): ${pct(tightCount / spacingCount)}`);
+console.log(`  Spacings in the tightest fifth (bias=${SPACING_BIAS}): ${pct(tightCount / spacingCount)}`);
 console.log("MIX VARIETY (obstacle share per run)");
 console.log(`  min / average / max across runs:       ${pct(obsShareMin)} / ${pct(obsShareSum / TRIALS)} / ${pct(obsShareMax)}`);
 console.log(`  total gaps vs obstacles generated:     ${totalGaps} gaps, ${totalObstacles} obstacles`);
